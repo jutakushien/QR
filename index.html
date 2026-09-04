@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>受付番号QR印刷</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<style>
+  :root {
+    --main: #2d6a4f;
+    --bg: #f4f7f5;
+    --card: #ffffff;
+    --danger: #c0392b;
+    --text: #1b2a24;
+    --muted: #6b7d75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  h1 {
+    font-size: 20px;
+    text-align: center;
+    margin: 8px 0 16px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .video-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+  }
+  video, canvas {
+    width: 100%;
+    display: block;
+  }
+  canvas.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+  .status {
+    text-align: center;
+    margin-top: 10px;
+    font-size: 15px;
+    min-height: 22px;
+  }
+  .status.ok { color: var(--main); font-weight: bold; }
+  .status.err { color: var(--danger); font-weight: bold; }
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  button {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--main); color: white; }
+  .btn-secondary { background: #dfe7e3; color: var(--text); }
+  .btn-danger { background: var(--danger); color: white; }
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin: 10px 0 4px;
+  }
+  input[type=text], input[type=number] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #d0d7d3;
+    border-radius: 8px;
+    font-size: 15px;
+  }
+  details summary {
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .last-number {
+    font-size: 34px;
+    text-align: center;
+    font-weight: bold;
+    color: var(--main);
+    margin: 6px 0;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+
+<h1>受付番号QR読み取り &amp; レシート印刷</h1>
+
+<div class="card">
+  <div class="video-wrap">
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="overlay" class="overlay"></canvas>
+  </div>
+  <div class="status" id="status">カメラ待機中</div>
+  <div class="last-number" id="lastNumber">-</div>
+  <div class="btn-row">
+    <button class="btn-primary" id="startBtn">カメラ開始</button>
+    <button class="btn-danger" id="stopBtn">停止</button>
+  </div>
+</div>
+
+<div class="card">
+  <details>
+    <summary>⚙️ プリンター設定(最初に1回だけ入力)</summary>
+    <label>プリンターのIPアドレス</label>
+    <input type="text" id="printerIp" placeholder="例: 192.168.1.20" />
+
+    <label>デバイスID(通常は変更不要)</label>
+    <input type="text" id="deviceId" value="local_printer" />
+
+    <label>タイムアウト(ミリ秒)</label>
+    <input type="number" id="timeout" value="10000" />
+
+    <div class="toggle-row">
+      <span style="font-size:14px;">読み取ったら自動で印刷する</span>
+      <input type="checkbox" id="autoPrint" checked style="width:20px; height:20px;" />
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-secondary" id="testPrintBtn">テスト印刷</button>
+      <button class="btn-secondary" id="statusCheckBtn">接続確認</button>
+    </div>
+
+    <p class="hint">
+      ※プリンター本体の設定(Web設定画面 EpsonNet Config)で「ePOS-Print」を
+      Enable(有効)にし、Device IDを上と合わせてください。工場出荷時は無効になっています。<br/>
+      ※タブレットとプリンターは同じWi-Fiネットワークに接続してください。<br/>
+      ※カメラを使うには、このページをHTTPS経由(例: GitHub Pagesなど無料ホスティング)で
+      開く必要があります。file://で直接開くとカメラが動かない場合があります。
+    </p>
+  </details>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const overlayCtx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const lastNumberEl = document.getElementById('lastNumber');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const testPrintBtn = document.getElementById('testPrintBtn');
+const statusCheckBtn = document.getElementById('statusCheckBtn');
+const printerIpInput = document.getElementById('printerIp');
+const deviceIdInput = document.getElementById('deviceId');
+const timeoutInput = document.getElementById('timeout');
+const autoPrintInput = document.getElementById('autoPrint');
+
+let stream = null;
+let scanLoopId = null;
+let lastScannedValue = null;
+let lastScannedAt = 0;
+const COOLDOWN_MS = 5000; // same code won't reprint within 5s
+
+function setStatus(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }
+    });
+    video.srcObject = stream;
+    await video.play();
+    setStatus('カメラ起動中… QRコードをかざしてください');
+    scanLoop();
+  } catch (err) {
+    setStatus('カメラを起動できません: ' + err.message, 'err');
+  }
+}
+
+function stopCamera() {
+  if (scanLoopId) cancelAnimationFrame(scanLoopId);
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+  setStatus('停止しました');
+}
+
+function scanLoop() {
+  const hidden = document.createElement('canvas');
+  const hiddenCtx = hidden.getContext('2d', { willReadFrequently: true });
+
+  function tick() {
+    if (!stream) return;
+    if (video.videoWidth === 0) {
+      scanLoopId = requestAnimationFrame(tick);
+      return;
+    }
+    hidden.width = video.videoWidth;
+    hidden.height = video.videoHeight;
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
+    hiddenCtx.drawImage(video, 0, 0, hidden.width, hidden.height);
+    const imageData = hiddenCtx.getImageData(0, 0, hidden.width, hidden.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'dontInvert'
+    });
+
+    overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (code && code.data) {
+      drawBox(code.location);
+      handleScan(code.data);
+    }
+    scanLoopId = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function drawBox(loc) {
+  overlayCtx.strokeStyle = '#2d6a4f';
+  overlayCtx.lineWidth = 4;
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(loc.topLeftCorner.x, loc.topLeftCorner.y);
+  overlayCtx.lineTo(loc.topRightCorner.x, loc.topRightCorner.y);
+  overlayCtx.lineTo(loc.bottomRightCorner.x, loc.bottomRightCorner.y);
+  overlayCtx.lineTo(loc.bottomLeftCorner.x, loc.bottomLeftCorner.y);
+  overlayCtx.closePath();
+  overlayCtx.stroke();
+}
+
+function extractReceiptNumber(rawText) {
+  // Try JSON first, e.g. {"receipt_no": "12345"}
+  try {
+    const obj = JSON.parse(rawText);
+    if (obj && (obj.receipt_no || obj.number || obj.no)) {
+      return String(obj.receipt_no || obj.number || obj.no);
+    }
+  } catch (e) { /* not JSON, fall through */ }
+
+  // Try URL with a query param like ?no=12345
+  try {
+    const url = new URL(rawText);
+    const params = url.searchParams;
+    for (const key of ['no', 'number', 'receipt_no', 'id']) {
+      if (params.has(key)) return params.get(key);
+    }
+  } catch (e) { /* not a URL, fall through */ }
+
+  // Otherwise treat the whole QR content as the number
+  return rawText.trim();
+}
+
+function handleScan(rawText) {
+  const now = Date.now();
+  if (rawText === lastScannedValue && (now - lastScannedAt) < COOLDOWN_MS) {
+    return; // ignore repeat scans of the same code within cooldown
+  }
+  lastScannedValue = rawText;
+  lastScannedAt = now;
+
+  const number = extractReceiptNumber(rawText);
+  lastNumberEl.textContent = number;
+  setStatus('読み取り成功: ' + number, 'ok');
+
+  if (autoPrintInput.checked) {
+    printReceipt(number);
+  }
+}
+
+function buildEposXml(lines) {
+  let body = '<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">';
+  body += '<text align="center"/>';
+  body += '<text width="1" height="1">**************</text>';
+  body += '<feed line="1"/>';
+  body += '<text width="2" height="2">受付番号</text>';
+  body += '<feed line="1"/>';
+  body += '<text width="4" height="4" em="true">' + escapeXml(lines) + '</text>';
+  body += '<feed line="1"/>';
+  body += '<text width="1" height="1">**************</text>';
+  body += '<feed line="1"/>';
+  body += '<text width="1" height="1">お呼びするまで</text>';
+  body += '<text width="1" height="1">お待ちください</text>';
+  body += '<feed line="2"/>';
+  body += '<cut type="feed"/>';
+  body += '</epos-print>';
+  return body;
+}
+
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function sendToPrinter(eposXmlBody, onDone) {
+  const ip = printerIpInput.value.trim();
+  const devid = deviceIdInput.value.trim() || 'local_printer';
+  const timeout = parseInt(timeoutInput.value, 10) || 10000;
+
+  if (!ip) {
+    setStatus('プリンターのIPアドレスを設定してください(下の「⚙️ プリンター設定」を開く)', 'err');
+    return;
+  }
+
+  const soap = '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">' +
+               '<s:Body>' + eposXmlBody + '</s:Body></s:Envelope>';
+
+  const url = 'http://' + ip + '/cgi-bin/epos/service.cgi?devid=' +
+              encodeURIComponent(devid) + '&timeout=' + timeout;
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', url, true);
+  xhr.setRequestHeader('Content-Type', 'text/xml; charset=utf-8');
+  xhr.setRequestHeader('If-Modified-Since', 'Thu, 01 Jan 1970 00:00:00 GMT');
+  xhr.setRequestHeader('SOAPAction', '""');
+  xhr.timeout = timeout + 3000;
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200 && xhr.responseXML) {
+        const resNode = xhr.responseXML.getElementsByTagName('response')[0];
+        const success = resNode ? resNode.getAttribute('success') : null;
+        if (success === 'true' || success === '1') {
+          setStatus('印刷成功 ✅', 'ok');
+        } else {
+          const code = resNode ? resNode.getAttribute('code') : '不明';
+          setStatus('印刷エラー: ' + code, 'err');
+        }
+      } else {
+        setStatus('プリンターに接続できません(IP・Wi-Fiを確認してください)', 'err');
+      }
+      if (onDone) onDone();
+    }
+  };
+  xhr.onerror = function () {
+    setStatus('通信エラー: プリンターに届きませんでした', 'err');
+    if (onDone) onDone();
+  };
+  xhr.send(soap);
+}
+
+function printReceipt(number) {
+  setStatus('印刷中…');
+  const xml = buildEposXml(number);
+  sendToPrinter(xml);
+}
+
+startBtn.addEventListener('click', startCamera);
+stopBtn.addEventListener('click', stopCamera);
+
+testPrintBtn.addEventListener('click', () => {
+  printReceipt('TEST-0001');
+});
+
+statusCheckBtn.addEventListener('click', () => {
+  setStatus('接続確認中…');
+  const empty = '<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print" />';
+  sendToPrinter(empty);
+});
+</script>
+
+</body>
+</html>
